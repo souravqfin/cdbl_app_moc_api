@@ -1,0 +1,13 @@
+{
+  "uploadCode": "04",
+  "event": "NOMINEE_COMPLETED",
+  "success": true,
+  "dpInternalRefNo": "M9501",
+  "client_code": "M9501",
+  "uploadId": 7666,
+  "fileName": "043110001.16112026.01",
+  "rawResponse": {
+    "success": true,
+    "message": "Nominee processed successfully by CDBL"
+  }
+}

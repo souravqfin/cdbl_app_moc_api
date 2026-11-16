@@ -1,0 +1,10 @@
+{
+  "success": true,
+  "data": {
+    "status": "COMPLETED",
+    "dpInternalRefNo": "M9501",
+    "boid": "1604940078052399",
+    "setupDate": "2026-11-16",
+    "pdfDownloadUrl": "http://localhost/online_bo/data/docs/cdbl/cdbl_api.php?endpoint=/download/pdf/BO_Ack_1604940078052399_M9501.pdf"
+  }
+}

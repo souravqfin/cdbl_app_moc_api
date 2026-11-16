@@ -1,0 +1,15 @@
+{
+  "success": true,
+  "status": "QUEUED",
+  "message": "File accepted for processing and queued for CDBL submission.",
+  "data": {
+    "uploadRecordId": 4821,
+    "uploadId": 4821,
+    "queuedJobId": 9812,
+    "mainFileName": "033110001.16112026.01",
+    "fileName": "033110001.16112026.01",
+    "dpInternalRefNo": "M9501",
+    "callbackUrl": "http://localhost:8111/api/cdbl/callback",
+    "simulated_delay": "3s"
+  }
+}
