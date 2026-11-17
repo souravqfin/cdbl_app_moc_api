@@ -532,23 +532,21 @@ function runBackgroundCallbackJob(string $jobFile): void {
 // ------------------------------------------------------------------------------
 $isDirectPhp = str_contains($_SERVER['SCRIPT_NAME'] ?? '', 'cdbl_api.php') || str_contains($_SERVER['REQUEST_URI'] ?? '', 'cdbl_api.php');
 $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
-$scheme = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') ? 'https' : 'http';
+$scheme = ((isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https')) ? 'https' : 'http';
 
 $scriptName = $_SERVER['SCRIPT_NAME'] ?? '/online_bo/data/docs/cdbl/cdbl_api.php';
 if (str_contains($scriptName, 'cdbl_api.php')) {
     $cleanScript = substr($scriptName, 0, strpos($scriptName, 'cdbl_api.php') + strlen('cdbl_api.php'));
     $baseUrl = "{$scheme}://{$host}" . $cleanScript;
-} else {
-    $uriPath = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?? '/';
-    if (str_contains($uriPath, 'cdbl_api.php')) {
-        $cleanUri = substr($uriPath, 0, strpos($uriPath, 'cdbl_api.php') + strlen('cdbl_api.php'));
-        $baseUrl = "{$scheme}://{$host}" . $cleanUri;
+} elseif (str_contains($scriptName, 'index.php')) {
+    $dir = rtrim(str_replace('\\', '/', dirname($scriptName)), '/');
+    if ($dir === '' || $dir === '.') {
+        $baseUrl = "{$scheme}://{$host}";
     } else {
-        $baseUrl = "{$scheme}://{$host}" . rtrim($uriPath, '/');
-        if ($baseUrl === "{$scheme}://{$host}") {
-            $baseUrl = "{$scheme}://{$host}";
-        }
+        $baseUrl = "{$scheme}://{$host}" . $dir;
     }
+} else {
+    $baseUrl = "{$scheme}://{$host}";
 }
 
 // Check if raw text documentation is requested
@@ -565,8 +563,8 @@ $rawPath = parse_url($requestUri, PHP_URL_PATH) ?? '/';
 if (!empty($_SERVER['PATH_INFO'])) {
     $path = $_SERVER['PATH_INFO'];
 } else {
-    // Strip preceding directory structure leading to cdbl_api.php (e.g. /online_bo/data/docs/cdbl/cdbl_api.php)
-    $path = preg_replace('#^.*?cdbl_api\.php#', '', $rawPath);
+    // Strip preceding directory structure leading to cdbl_api.php or index.php
+    $path = preg_replace('#^.*?(?:cdbl_api\.php|index\.php)#', '', $rawPath);
     // Also strip webapp routes like /cdbl-api or /cdbl-mock
     $path = preg_replace('#^/(?:cdbl-api|cdbl-mock)#', '', $path);
 }
@@ -785,25 +783,27 @@ if ($method === 'GET' && preg_match('#(?:^|/)bo/ack/([^/]+)$#i', $path, $matches
         exit;
     }
 
-    // 3. Designated SUCCESS client code or state client
-    $isSuccessCode = (strcasecmp($clientCode, TEST_CLIENT_SUCCESS) === 0);
+    // 3. Client state inquiry
+    // Only return success if the client has actually submitted the VEDAS file for setup bo
     $client = $state['clients'][$clientCode] ?? null;
 
-    if (!$client && !$isSuccessCode) {
+    if (!$client || !in_array($client['last_upload_type'] ?? '', ['03', '05', 3, 5])) {
         http_response_code(404);
         header('Content-Type: application/json');
         $resp = [
             'success' => false,
-            'error'   => "Client code {$clientCode} not found in CDBL.",
+            'error'   => "Client code {$clientCode} not found in CDBL. VEDAS setup file has not been submitted yet.",
         ];
         echo json_encode($resp);
         recordTransaction('CDBL_INQUIRY', $path, 'GET', $clientCode, '404 NOT_FOUND', $resp);
         exit;
     }
 
+    $isSuccessCode = (strcasecmp($clientCode, TEST_CLIENT_SUCCESS) === 0);
+
     http_response_code(200);
     header('Content-Type: application/json');
-    $statusStr = $client['status'] ?? ($isSuccessCode ? 'COMPLETED' : 'QUEUED');
+    $statusStr = $client['status'] ?? 'COMPLETED';
     $boid = $client['boid'] ?? ($isSuccessCode ? DEFAULT_BOID : ('16049400' . rand(10000000, 99999999)));
     $setupDate = $client['setupDate'] ?? date('Y-m-d');
     $pdfUrl = rtrim($baseUrl, '/') . "/v1/cdbl/download/pdf/BO_Ack_{$boid}_{$clientCode}.pdf";
@@ -813,7 +813,7 @@ if ($method === 'GET' && preg_match('#(?:^|/)bo/ack/([^/]+)$#i', $path, $matches
         'data'    => [
             'status'          => $statusStr,
             'dpInternalRefNo' => $clientCode,
-            'boid'            => $boid,
+            'boid'            => ($statusStr === 'COMPLETED' ? $boid : null),
             'setupDate'       => $setupDate,
             'pdfDownloadUrl'  => ($statusStr === 'COMPLETED' ? $pdfUrl : null),
         ],
@@ -869,21 +869,25 @@ if ($method === 'POST' && preg_match('#(?:^|/)upload$#i', $path)) {
         : ($state['clients'][$clientCode]['boid'] ?? ('16049400' . rand(10000000, 99999999)));
 
     if ($clientCode) {
-        if (!isset($state['clients'][$clientCode])) {
-            $state['clients'][$clientCode] = [
-                'client_code'         => $clientCode,
-                'boid'                => $boid,
-                'setupDate'           => date('Y-m-d'),
-                'created_at'          => date('Y-m-d H:i:s'),
-                'status'              => 'QUEUED',
-                'uploadRecordId'      => $uploadRecordId,
-                'queuedJobId'         => $queuedJobId,
-                'callbackUrl'         => $callbackUrl,
-                'callback_dispatched' => false,
-            ];
-        }
-        $state['clients'][$clientCode]['last_upload_type'] = $uploadType;
-        $state['clients'][$clientCode]['last_upload_time'] = date('Y-m-d H:i:s');
+        $isSetup = in_array($uploadType, ['03', '05', 3, 5]);
+        $isSuccessClient = (strcasecmp($clientCode, TEST_CLIENT_SUCCESS) === 0);
+
+        // Keep it success when it submitted the vedas file for setup bo
+        $status = ($isSetup || $isSuccessClient) ? 'COMPLETED' : 'QUEUED';
+
+        $state['clients'][$clientCode] = [
+            'client_code'         => $clientCode,
+            'boid'                => $boid,
+            'setupDate'           => date('Y-m-d'),
+            'created_at'          => $state['clients'][$clientCode]['created_at'] ?? date('Y-m-d H:i:s'),
+            'status'              => $status,
+            'uploadRecordId'      => $uploadRecordId,
+            'queuedJobId'         => $queuedJobId,
+            'callbackUrl'         => $callbackUrl,
+            'callback_dispatched' => false,
+            'last_upload_type'    => $uploadType,
+            'last_upload_time'    => date('Y-m-d H:i:s'),
+        ];
         saveState($state);
     }
 
